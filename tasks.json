@@ -1,0 +1,29 @@
+[
+  {
+    "peerId": 2000000003,
+    "time": "19:01",
+    "text": "тест",
+    "times": 4,
+    "sent": false,
+    "lastSentMinute": null,
+    "createdAt": "2025-09-06T16:04:45.942Z"
+  },
+  {
+    "peerId": 2000000003,
+    "time": "19:01",
+    "text": "тест",
+    "times": 4,
+    "sent": false,
+    "lastSentMinute": null,
+    "createdAt": "2025-09-06T16:12:58.425Z"
+  },
+  {
+    "peerId": 2000000003,
+    "time": "13:50",
+    "text": "[id739574438|@marcello_white] мп",
+    "times": 10,
+    "sent": false,
+    "lastSentMinute": null,
+    "createdAt": "2025-09-07T10:21:50.983Z"
+  }
+]

@@ -1,0 +1,13 @@
+{
+  "name": "matr-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.11.0",
+    "express": "^5.1.0",
+    "node-fetch": "^3.3.2",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "vk-io": "^4.0.0"
+  }
+}
