@@ -2,6 +2,35 @@ import { VK } from "vk-io";
 import fs from "fs/promises";
 import express from "express";
 import fetch from "node-fetch";
+const { saperGames, renderSaperButtons, startGame, handleSaperClick } = require('./saper');
+
+
+
+// Обработчик сообщений
+vk.updates.on('message', async (context) => {
+  const { text, senderId, peerId, payload } = context;
+
+  // Обработка в случае клика по кнопке
+  if (payload) {
+    await handleSaperClick(context, senderId, peerId, payload, vk);
+    return;
+  }
+
+  // Запуск игры
+  if (text === '!сапер') {
+    const board = startGame(peerId, senderId);
+    await vk.api.messages.send({
+      peer_id: peerId,
+      message: '💣 Игра сапёр! Нажимай на квадраты:',
+      random_id: Math.floor(Math.random() * 1e9),
+      keyboard: renderSaperButtons(board),
+    });
+    return;
+  }
+
+
+
+
 
 // === Константы ===
 const TASKS_FILE = "./tasks.json";
