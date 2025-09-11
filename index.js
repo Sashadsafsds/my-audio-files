@@ -27,7 +27,7 @@ vk.updates.on('message', async (context) => {
     });
     return;
   }
-
+});
 
 
 
