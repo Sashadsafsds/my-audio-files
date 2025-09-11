@@ -78,7 +78,7 @@ function validateTimeString(time){
   const parts = time.split(":");
   if(parts.length!==2) return false;
   const [h,m] = parts.map(x=>parseInt(x,10));
-  return !isNaN(h)&&!isNaN(m)&&h>=0&&h<=23&&m>=0&&m<=59;
+  return !isNaN(h)&&!isNaN(m)&&h>=0&&m<=59;
 }
 
 function createTask(peerId,time,text,times){ return {peerId,time,text,times,sent:false,createdAt:new Date().toISOString()}; }
@@ -106,8 +106,8 @@ async function logMessage(context){
   await fs.appendFile(LOG_FILE,line);
 }
 
-// === Варны и баны ===
-function checkBan(id){ const u=users[id]; return u?.bannedUntil&&Date.now()<u.bannedUntil; }
+// === Варны и бан ===
+function checkBan(id){ const u=users[id]; return u?.bannedUntil && Date.now()<u.bannedUntil; }
 function addWarn(id){
   if(!users[id]) users[id]={warns:0,bannedUntil:null};
   users[id].warns+=1;
@@ -115,11 +115,11 @@ function addWarn(id){
   return `⚠️ Предупреждение №${users[id].warns}`;
 }
 
-// === Кик ===
-function kickUser(id){ users[id]={warns:0,bannedUntil=Date.now()+60*60*1000}; return "👢 Пользователь кикнут на 1 час"; }
+// === Кик (мгновенный) ===
+function kickUser(id){ users[id]={warns:0,bannedUntil:Date.now()}; return "👢 Пользователь кикнут"; }
 
 // === Сапёр ===
-function generateSaperBoard(size=5,mines=5){
+function generateSaperBoard(size=6,mines=8){
   const board=Array(size).fill(0).map(()=>Array(size).fill(0));
   let placed=0;
   while(placed<mines){
@@ -129,7 +129,6 @@ function generateSaperBoard(size=5,mines=5){
   }
   return board;
 }
-
 function renderSaper(board){ return board.map(r=>r.map(c=>c==="💣"?c:"⬜").join(" ")).join("\n"); }
 
 // === Отправка сообщений ===
@@ -156,15 +155,13 @@ updates.on("message_new", async(context)=>{
   if(!context.text) return;
   const text=context.text.trim();
   await logMessage(context);
-
   const peerId=context.peerId;
   const senderId=context.senderId;
 
   if(checkBan(senderId)) return;
 
-  // === Команды ===
+  // === Команды системы задач ===
   if(text.startsWith("!bind")||text==="!tasks"||text.startsWith("!deltask")){
-    // вставляем твой старый код команд полностью как было
     if(text.startsWith("!bind")){
       if(context.isChat){
         const members = await vk.api.messages.getConversationMembers({peer_id});
@@ -198,15 +195,14 @@ updates.on("message_new", async(context)=>{
     }
   }
 
+  // === Варны, кик, сапёр, помощь ===
   if(text.startsWith("!warn")){
-    const target=parseInt(text.split(" ")[1]);
-    if(!target) return context.send("❌ Использование: !warn ID");
+    const target=parseInt(text.split(" ")[1]); if(!target) return context.send("❌ Использование: !warn ID");
     const msg=addWarn(target); await saveUsers(); return context.send(msg);
   }
 
   if(text.startsWith("!kick")){
-    const target=parseInt(text.split(" ")[1]);
-    if(!target) return context.send("❌ Использование: !kick ID");
+    const target=parseInt(text.split(" ")[1]); if(!target) return context.send("❌ Использование: !kick ID");
     const msg=kickUser(target); await saveUsers(); return context.send(msg);
   }
 
@@ -223,7 +219,7 @@ updates.on("message_new", async(context)=>{
 !tasks - список задач
 !deltask N - удалить задачу
 !warn ID - выдать варн
-!kick ID - кикнуть пользователя на 1 час
+!kick ID - мгновенный кик пользователя
 !saper - сыграть в Сапёр
 !help - показать команды
 `);
