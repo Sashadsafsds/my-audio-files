@@ -54,7 +54,7 @@ async function replicatePredict(model, input) {
     console.error("❌ Ошибка:", e.message);
   }
 
-
+ })();
 
 
 
