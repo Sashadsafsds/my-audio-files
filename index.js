@@ -3,6 +3,38 @@ import fs from "fs/promises";
 import express from "express";
 import fetch from "node-fetch";
 
+
+// Пример через fetch к Replicate (подходит для многих моделей: text, image и т.д.)
+const REPLICATE_TOKEN = process.env.REPLICATE_TOKEN || "r8_cYol94rbSi0cblaWkJbe3nDBYqPJwsP0o9e54";
+
+async function replicatePredict(model, input) {
+  const res = await fetch("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Token ${REPLICATE_TOKEN}`
+    },
+    body: JSON.stringify({
+      version: model, // обычно берут версию/ид модели с сайта replicate
+      input: input
+    })
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`Replicate error ${res.status}: ${txt}`);
+  }
+  const data = await res.json();
+  return data;
+}
+
+// пример вызова (замени model на реальный id/версию с replicate.com)
+replicatePredict("MODEL_VERSION_ID", { prompt: "Привет, сгенерируй 1 абзац о котиках" })
+  .then(r => console.log("Replicate:", r))
+  .catch(e => console.error(e));
+
+
+
+
 // === Константы ===
 const TASKS_FILE = "./tasks.json";
 const LOG_FILE = "./logs.txt";
