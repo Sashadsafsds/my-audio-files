@@ -187,18 +187,22 @@ async function sendMessage(peerId, text, keyboard) {
 
 // === Сапёр: рендер кнопок ===
 function renderSaperButtons(board){
-  return {
+  return JSON.stringify({
     one_time: false,
     inline: true,
     buttons: board.map((row, x) =>
       row.map((cell, y) => ({
-        text: cell === "💣" ? "⬜" : cell,
-        payload: JSON.stringify({type:`saper_${x}_${y}`}),
+        action: {
+          type: "text",
+          label: cell === "💣" ? "⬜" : cell,
+          payload: JSON.stringify({type:`saper_${x}_${y}`})
+        },
         color: "secondary"
       }))
     )
-  };
+  });
 }
+
 
 // === Планировщик задач ===
 setInterval(async () => {
