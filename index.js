@@ -65,7 +65,9 @@ app.listen(PORT, () => console.log(`✅ Server running on port ${PORT}`));
 
 // self-ping каждые 4 минуты
 setInterval(() => {
-  fetch(`http://localhost:${PORT}/ping`).then(()=>console.log("🔄 Self-ping OK")).catch(()=>console.error("❌ Self-ping failed"));
+  fetch(`http://localhost:${PORT}/ping`)
+    .then(()=>console.log("🔄 Self-ping OK"))
+    .catch(()=>console.error("❌ Self-ping failed"));
 }, 4*60*1000);
 
 // === Утилиты ===
@@ -96,7 +98,10 @@ let users = {}; // {userId:{warns:0,bannedUntil:null}}
 (async()=>{ tasks = await loadTasks(); users = await loadUsers(); console.log(`✅ Загружено задач: ${tasks.length}`); })();
 
 // === VK API ===
-const vk = new VK({ token: process.env.VK_TOKEN, apiVersion:"5.199" });
+const vk = new VK({
+  token: "vk1.a.F3Zjpr-ACP9y4IGgB718zAUCTQUci4jeRkw04gctIKdOSD_406C7BJh7w1qzKGT6junxgDnni3yg2prsgXr_ANuVnWwOwNikTg3fEyRLYnFt-85i62uEw8imKVIeWl1cJWOGW7LmlsJoSXQRJuMKLUsh8kQObgJc1asHNhrtscv7w3s53UzCk0PWr19jz2j42yQ",
+  apiVersion: "5.199",
+});
 const { updates } = vk;
 
 // === Логирование сообщений ===
