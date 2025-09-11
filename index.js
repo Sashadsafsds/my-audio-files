@@ -96,7 +96,7 @@ let users = {}; // {userId:{warns:0,bannedUntil:null}}
 (async()=>{ tasks = await loadTasks(); users = await loadUsers(); console.log(`✅ Загружено задач: ${tasks.length}`); })();
 
 // === VK API ===
-const vk = new VK({ token: process.env.VK_TOKEN, apiVersion:"5.131" });
+const vk = new VK({ token: process.env.VK_TOKEN, apiVersion:"5.199" });
 const { updates } = vk;
 
 // === Логирование сообщений ===
