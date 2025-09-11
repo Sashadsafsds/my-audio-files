@@ -203,7 +203,6 @@ function renderSaperButtons(board){
   });
 }
 
-
 // === Планировщик задач ===
 setInterval(async () => {
   const currentTime = formatTime();
@@ -244,7 +243,7 @@ updates.on("message_new", async (context) => {
 
   const peerId = context.peerId;
   const text = context.text?.trim();
-  const senderId = context.senderId;
+   const senderId = context.senderId;
 
   if(!text) return;
 
@@ -261,7 +260,8 @@ updates.on("message_new", async (context) => {
 !warn @user - выдать варн
 !ban @user - забанить
 !kick @user - кикнуть
-!saper - начать игру сапёр`
+!saper - начать игру сапёр
+!saper_reset - сбросить текущую игру сапёр`
     );
   }
 
@@ -283,11 +283,17 @@ updates.on("message_new", async (context) => {
     return context.send(`👢 Пользователь ${uid} кикнут`);
   }
 
-  // === !saper ===
+  // === !saper - начать игру ===
   if(text === "!saper"){
     const board = Array.from({length:5},()=>Array.from({length:5},()=>Math.random()<0.2?"💣":"⬜"));
     saperGames[senderId] = board;
     return context.send("💣 Игра сапёр! Нажимай на квадраты:", renderSaperButtons(board));
+  }
+
+  // === !saper_reset - сброс игры ===
+  if(text === "!saper_reset"){
+    delete saperGames[senderId];
+    return context.send("🔄 Игра сапёр сброшена. Чтобы начать новую, напиши !saper");
   }
 
   // === Обработка нажатий сапёра ===
@@ -305,36 +311,27 @@ updates.on("message_new", async (context) => {
     const y = parseInt(parts[2]);
     const board = saperGames[senderId];
     if(!board) return context.send("❌ Игра не найдена. Напиши !saper");
-    if(board[x][y]==="💣"){ delete saperGames[senderId]; return context.send("💥 Бум! Вы проиграли!"); }
+    if(board[x][y]==="💣"){ 
+      delete saperGames[senderId]; 
+      return context.send("💥 Бум! Вы проиграли!"); 
+    }
     board[x][y]="✅"; 
     return context.send("🟩 Открыто!", renderSaperButtons(board));
   }
 
-  // === Твой существующий !bind, !tasks, !deltask код здесь ===
+  // === !bind ===
   if (text.startsWith("!bind")) {
     if (context.isChat) {
-      const members = await vk.api.messages.getConversationMembers({
-        peer_id: peerId,
-      });
-      const member = members.items.find(
-        (m) => m.member_id === senderId,
-      );
-      if (!member?.is_admin) {
-        return context.send(
-          "❌ Только администраторы чата могут использовать !bind",
-        );
-      }
+      const members = await vk.api.messages.getConversationMembers({ peer_id: peerId });
+      const member = members.items.find((m) => m.member_id === senderId);
+      if (!member?.is_admin) return context.send("❌ Только администраторы чата могут использовать !bind");
     }
 
     const parts = text.split(" ");
-    if (parts.length < 3)
-      return context.send(
-        "❌ Использование: !bind HH:MM текст [кол-во повторов]",
-      );
+    if (parts.length < 3) return context.send("❌ Использование: !bind HH:MM текст [кол-во повторов]");
 
     let time = parts[1];
-    if (!validateTimeString(time))
-      return context.send("❌ Неверный формат времени");
+    if (!validateTimeString(time)) return context.send("❌ Неверный формат времени");
 
     let repeatCount = 1;
     let msgText = "";
@@ -346,34 +343,29 @@ updates.on("message_new", async (context) => {
     }
 
     if (!msgText) return context.send("❌ Текст задачи не может быть пустым");
-    if (repeatCount < 1)
-      return context.send("❌ Количество повторов должно быть > 0");
+    if (repeatCount < 1) return context.send("❌ Количество повторов должно быть > 0");
 
     const newTask = createTask(peerId, time, msgText, repeatCount);
     tasks.push(newTask);
     await saveTasks(tasks);
 
-    return context.send(
-      `✅ Задача добавлена:\n🕒 ${time}\n💬 "${msgText}"\n🔁 ${repeatCount} раз`,
-    );
+    return context.send(`✅ Задача добавлена:\n🕒 ${time}\n💬 "${msgText}"\n🔁 ${repeatCount} раз`);
   }
 
+  // === !tasks ===
   if (text === "!tasks") {
     if (tasks.length === 0) return context.send("📭 Нет активных задач");
     let list = "📋 Активные задачи:\n";
-    tasks.forEach((t, i) => {
-      list += `${i + 1}. [${t.time}] "${t.text}" ×${t.times}\n`;
-    });
+    tasks.forEach((t, i) => { list += `${i + 1}. [${t.time}] "${t.text}" ×${t.times}\n`; });
     return context.send(list);
   }
 
+  // === !deltask ===
   if (text.startsWith("!deltask")) {
     const parts = text.split(" ");
-    if (parts.length !== 2)
-      return context.send("❌ Использование: !deltask номер");
+    if (parts.length !== 2) return context.send("❌ Использование: !deltask номер");
     const idx = parseInt(parts[1], 10) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= tasks.length)
-      return context.send("❌ Неверный номер задачи");
+    if (isNaN(idx) || idx < 0 || idx >= tasks.length) return context.send("❌ Неверный номер задачи");
     const removed = tasks.splice(idx, 1);
     await saveTasks(tasks);
     return context.send(`🗑 Удалена задача: "${removed[0].text}"`);
