@@ -4,8 +4,14 @@ import express from "express";
 import fetch from "node-fetch";
 
 
-// Пример через fetch к Replicate (подходит для многих моделей: text, image и т.д.)
+
+
+
+// === Replicate ===
 const REPLICATE_TOKEN = process.env.REPLICATE_TOKEN || "r8_cYol94rbSi0cblaWkJbe3nDBYqPJwsP0o9e54";
+
+// версия модели Llama-2 7B Chat (можно взять любую другую с replicate.com → вкладка "API" → version)
+const MODEL_VERSION_ID = "3fb8a60f5b529f1664602a30e1e1f7b12c2705afc62a3b80830f1a6a9eae2e13";
 
 async function replicatePredict(model, input) {
   const res = await fetch("https://api.replicate.com/v1/predictions", {
@@ -15,22 +21,49 @@ async function replicatePredict(model, input) {
       "Authorization": `Token ${REPLICATE_TOKEN}`
     },
     body: JSON.stringify({
-      version: model, // обычно берут версию/ид модели с сайта replicate
+      version: model,
       input: input
     })
   });
+
   if (!res.ok) {
     const txt = await res.text();
     throw new Error(`Replicate error ${res.status}: ${txt}`);
   }
+
   const data = await res.json();
   return data;
 }
 
-// пример вызова (замени model на реальный id/версию с replicate.com)
-replicatePredict("MODEL_VERSION_ID", { prompt: "Привет, сгенерируй 1 абзац о котиках" })
-  .then(r => console.log("Replicate:", r))
-  .catch(e => console.error(e));
+// === Пример вызова ===
+(async () => {
+  try {
+    const result = await replicatePredict(MODEL_VERSION_ID, {
+      prompt: "Напиши короткий тост про котиков 🐱"
+    });
+    console.log("✅ Replicate prediction created:", result);
+
+    // Результат приходит не сразу — надо опрашивать endpoint `result.urls.get`
+    const poll = await fetch(result.urls.get, {
+      headers: { "Authorization": `Token ${REPLICATE_TOKEN}` }
+    });
+    const output = await poll.json();
+
+    console.log("📜 Вывод модели:", output.output);
+  } catch (e) {
+    console.error("❌ Ошибка:", e.message);
+  }
+
+
+
+
+
+
+
+
+
+
+
 
 
 
