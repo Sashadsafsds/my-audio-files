@@ -1,21 +1,12 @@
+// === Импорты ===
 import { VK } from "vk-io";
 import fs from "fs/promises";
 import express from "express";
 import fetch from "node-fetch";
+import { Pool } from "pg";
+import dotenv from "dotenv";
 
-
-
-
-
-
-
-
-
-
-
-
-
-
+dotenv.config();
 
 // === Константы ===
 const TASKS_FILE = "./tasks.json";
@@ -23,87 +14,49 @@ const LOG_FILE = "./logs.txt";
 const TIMEZONE_OFFSET = 3; // Москва UTC+3
 const PORT = process.env.PORT || 3000;
 
-// === Express keep-alive ===
-const app = express();
-
-// /ping (для self-ping)
-app.get("/ping", (req, res) => res.send("pong"));
-
-// / (список задач)
-app.get("/", async (req, res) => {
-  try {
-    const data = await fs.readFile(TASKS_FILE, "utf-8");
-    const tasks = JSON.parse(data);
-
-    let html = `
-      <html>
-        <head>
-          <title>Задачи бота</title>
-          <meta charset="utf-8">
-          <style>
-            body { font-family: sans-serif; padding: 20px; background: #f9f9f9; }
-            h1 { color: #333; }
-            table { border-collapse: collapse; width: 100%; background: #fff; }
-            th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-            th { background-color: #f4f4f4; }
-            tr:nth-child(even) { background-color: #fdfdfd; }
-            tr:hover { background-color: #f1f7ff; }
-            .sent { color: green; font-weight: bold; }
-            .not-sent { color: red; font-weight: bold; }
-          </style>
-          <script>
-            setTimeout(() => { location.reload(); }, 5000);
-          </script>
-        </head>
-        <body>
-          <h1>Список задач бота</h1>
-          <table>
-            <tr>
-              <th>#</th>
-              <th>Время (МСК)</th>
-              <th>Текст</th>
-              <th>Повторов</th>
-              <th>Отправлено</th>
-              <th>Кто создал</th>
-            </tr>
-    `;
-
-    tasks.forEach((task, index) => {
-      const cleanText = task.text.replace(/\[id\d+\|([^\]]+)\]/g, "$1");
-      html += `
-        <tr>
-          <td>${index + 1}</td>
-          <td>${task.time}</td>
-          <td>${cleanText}</td>
-          <td>${task.times}</td>
-          <td class="${task.sent ? "sent" : "not-sent"}">${task.sent ? "✅" : "❌"}</td>
-          <td>${task.peerId}</td>
-        </tr>
-      `;
-    });
-
-    html += `</table></body></html>`;
-    res.send(html);
-  } catch (err) {
-    res.send("Ошибка загрузки задач: " + err.message);
-  }
+// === Подключение к PostgreSQL ===
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
 });
 
+// === Инициализация БД ===
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      user_id BIGINT NOT NULL,
+      chat_id BIGINT DEFAULT NULL,
+      warns INT DEFAULT 0,
+      banned BOOLEAN DEFAULT FALSE,
+      global BOOLEAN DEFAULT FALSE,
+      PRIMARY KEY (user_id, COALESCE(chat_id, -1))
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS groups (
+      chat_id BIGINT PRIMARY KEY,
+      title TEXT,
+      members_count INT DEFAULT 0
+    )
+  `);
+
+  console.log("✅ Таблицы users и groups инициализированы");
+}
+
+// === Express keep-alive ===
+const app = express();
+app.get("/ping", (req, res) => res.send("pong"));
 app.listen(PORT, () => {
   console.log(`✅ Keep-alive server running on port ${PORT}`);
 });
+setInterval(() => {
+  fetch(`http://localhost:${PORT}/ping`)
+    .then(() => console.log("🔄 Self-ping OK"))
+    .catch((err) => console.error("❌ Self-ping failed:", err.message));
+}, 4 * 60 * 1000);
 
-// self-ping костыль (каждые 4 минуты)
-setInterval(
-  () => {
-    fetch(`http://localhost:${PORT}/ping`)
-      .then(() => console.log("🔄 Self-ping OK"))
-      .catch((err) => console.error("❌ Self-ping failed:", err.message));
-  },
-  4 * 60 * 1000,
-);
-
-// === Утилиты ===
+// === Утилиты времени ===
 function formatTime(date = new Date()) {
   const localDate = new Date(date.getTime() + TIMEZONE_OFFSET * 60 * 60 * 1000);
   const hh = localDate.getUTCHours().toString().padStart(2, "0");
@@ -139,7 +92,6 @@ async function saveTasks(tasks) {
     console.error("❌ Ошибка сохранения tasks.json:", err.message);
   }
 }
-
 async function loadTasks() {
   try {
     const data = await fs.readFile(TASKS_FILE, "utf-8");
@@ -149,40 +101,70 @@ async function loadTasks() {
     return [];
   } catch (err) {
     console.error("⚠️ Не удалось загрузить tasks.json:", err.message);
-    try {
-      await fs.access(TASKS_FILE);
-      const backupName = `tasks_backup_${Date.now()}.json`;
-      await fs.copyFile(TASKS_FILE, backupName);
-      console.log(`💾 Создана резервная копия: ${backupName}`);
-    } catch {}
     await saveTasks([]);
     return [];
   }
 }
 
-// === Глобальное хранилище задач ===
+// === Хранилище ===
 let tasks = [];
 (async () => {
   tasks = await loadTasks();
   console.log(`✅ Загружено задач: ${tasks.length}`);
+  await initDB();
 })();
 
-// === Пользователи (warn/ban/kick) ===
-let users = {};
-
-// === Сапёр игры ===
 let saperGames = {};
 
 // === VK API ===
 const vk = new VK({
- token: 
-   'vk1.a.F3Zjpr-ACP9y4IGgB718zAUCTQUci4jeRkw04gctIKdOSD_406C7BJh7w1qzKGT6junxgDnni3yg2prsgXr_ANuVnWwOwNikTg3fEyRLYnFt-85i62uEw8mWxLLOfQpyOH3x5hmW8imKVIeWl1cJWOGW7LmlsJoSXQRJuMKLUsh8kQObgJc1asHNhrtscv7w3s53UzCk0PWr19jz2j42yQ',
+  token: process.env.VK_TOKEN,
   apiVersion: "5.199",
 });
-
 const { updates } = vk;
 
-// === Отправка сообщений с логами ===
+// === Утилиты для работы с БД пользователей ===
+async function addWarn(userId, chatId, global = false) {
+  const keyChat = global ? null : chatId;
+  await pool.query(
+    `INSERT INTO users (user_id, chat_id, warns, global)
+     VALUES ($1, $2, 1, $3)
+     ON CONFLICT (user_id, COALESCE(chat_id, -1))
+     DO UPDATE SET warns = users.warns + 1`,
+    [userId, keyChat, global]
+  );
+}
+async function banUser(userId, chatId, global = false) {
+  const keyChat = global ? null : chatId;
+  await pool.query(
+    `INSERT INTO users (user_id, chat_id, banned, global)
+     VALUES ($1, $2, TRUE, $3)
+     ON CONFLICT (user_id, COALESCE(chat_id, -1))
+     DO UPDATE SET banned = TRUE`,
+    [userId, keyChat, global]
+  );
+}
+async function unbanUser(userId, chatId, global = false) {
+  const keyChat = global ? null : chatId;
+  await pool.query(
+    `UPDATE users SET banned = FALSE WHERE user_id=$1 AND COALESCE(chat_id, -1) = COALESCE($2, -1)`,
+    [userId, keyChat]
+  );
+}
+async function getStats() {
+  const totalUsers = await pool.query("SELECT COUNT(*) FROM users");
+  const totalGroups = await pool.query("SELECT COUNT(*) FROM groups");
+  const banned = await pool.query("SELECT COUNT(*) FROM users WHERE banned=TRUE");
+  const warns = await pool.query("SELECT SUM(warns) FROM users");
+  return {
+    users: totalUsers.rows[0].count,
+    groups: totalGroups.rows[0].count,
+    banned: banned.rows[0].count,
+    warns: warns.rows[0].sum || 0,
+  };
+}
+
+// === Логи сообщений ===
 async function sendMessage(peerId, text, keyboard) {
   try {
     await vk.api.messages.send({
@@ -199,8 +181,8 @@ async function sendMessage(peerId, text, keyboard) {
   }
 }
 
-// === Сапёр: рендер кнопок ===
-function renderSaperButtons(board){
+// === Сапёр ===
+function renderSaperButtons(board) {
   return JSON.stringify({
     one_time: false,
     inline: true,
@@ -209,11 +191,11 @@ function renderSaperButtons(board){
         action: {
           type: "text",
           label: cell === "💣" ? "⬜" : cell,
-          payload: JSON.stringify({type:`saper_${x}_${y}`})
+          payload: JSON.stringify({ type: `saper_${x}_${y}` }),
         },
-        color: "secondary"
+        color: "secondary",
       }))
-    )
+    ),
   });
 }
 
@@ -221,132 +203,138 @@ function renderSaperButtons(board){
 setInterval(async () => {
   const currentTime = formatTime();
   let changed = false;
-
   for (let i = tasks.length - 1; i >= 0; i--) {
     const task = tasks[i];
-
     if (!validateTimeString(task.time)) {
-      console.error("⚠️ Задача имеет неверное время:", task);
       tasks.splice(i, 1);
       changed = true;
       continue;
     }
-
     if (task.time === currentTime && !task.sent) {
-      console.log(
-        `📨 Отправка задачи "${task.text}" → ${task.peerId} (${task.times} раз)`,
-      );
-
       for (let j = 0; j < task.times; j++) {
         await sendMessage(task.peerId, task.text);
-        console.log(`✅ Отправлено ${j + 1}/${task.times}`);
       }
-
       task.sent = true;
-      tasks.splice(i, 1); // удаляем задачу после всех отправок
+      tasks.splice(i, 1);
       changed = true;
     }
   }
-
   if (changed) await saveTasks(tasks);
 }, 5 * 1000);
 
 // === Обработка сообщений ===
 updates.on("message_new", async (context) => {
   if (!context.isUser && !context.isChat) return;
-
   const peerId = context.peerId;
   const text = context.text?.trim();
-   const senderId = context.senderId;
-
-  if(!text) return;
-
-  // === Лог сообщений ===
+  const senderId = context.senderId;
+  if (!text) return;
   await fs.appendFile(LOG_FILE, `[${new Date().toISOString()}] ${senderId}: ${text}\n`);
 
-  // === !help ===
-  if(text === "!help"){
+  // === help ===
+  if (text === "!help") {
     return context.send(
       `📚 Команды бота:
 !bind HH:MM текст [кол-во повторов] - добавить задачу
 !tasks - список задач
 !deltask номер - удалить задачу
-!warn @user - выдать варн
-!ban @user - забанить
-!kick @user - кикнуть
-!saper - начать игру сапёр
-!saper_reset - сбросить текущую игру сапёр`
+!warn @id - варн (локально)
+!ban @id - бан (локально)
+!kick @id - кик (локально)
+!awarn @id - варн (глобально)
+!aban @id - бан (глобально)
+!akick @id - кик (глобально)
+!stats - статистика
+!saper - сапёр
+!saper_reset - сброс игры`
     );
   }
 
-  // === !warn / !ban / !kick ===
-  if(text.startsWith("!warn")){
-    const uid = parseInt(text.split(" ")[1])||senderId;
-    users[uid] = users[uid] || {warns:0, banned:false};
-    users[uid].warns++;
-    return context.send(`⚠️ Пользователь ${uid} получил варн. Всего варнов: ${users[uid].warns}`);
+  // === Warn/Ban/Kick локальные ===
+  if (text.startsWith("!warn")) {
+    const uid = parseInt(text.split(" ")[1]) || senderId;
+    await addWarn(uid, peerId, false);
+    return context.send(`⚠️ Пользователь ${uid} получил локальный варн`);
   }
-  if(text.startsWith("!ban")){
-    const uid = parseInt(text.split(" ")[1])||senderId;
-    users[uid] = users[uid] || {warns:0, banned:false};
-    users[uid].banned = true;
-    return context.send(`⛔ Пользователь ${uid} забанен`);
+  if (text.startsWith("!ban")) {
+    const uid = parseInt(text.split(" ")[1]) || senderId;
+    await banUser(uid, peerId, false);
+    return context.send(`⛔ Пользователь ${uid} локально забанен`);
   }
-  if(text.startsWith("!kick")){
-    const uid = parseInt(text.split(" ")[1])||senderId;
-    return context.send(`👢 Пользователь ${uid} кикнут`);
+  if (text.startsWith("!kick")) {
+    const uid = parseInt(text.split(" ")[1]) || senderId;
+    return context.send(`👢 Пользователь ${uid} кикнут из этого чата`);
   }
 
-  // === !saper - начать игру ===
-  if(text === "!saper"){
-    const board = Array.from({length:5},()=>Array.from({length:5},()=>Math.random()<0.2?"💣":"⬜"));
+  // === Warn/Ban/Kick глобальные ===
+  if (text.startsWith("!awarn")) {
+    const uid = parseInt(text.split(" ")[1]) || senderId;
+    await addWarn(uid, null, true);
+    return context.send(`⚠️ Пользователь ${uid} получил глобальный варн`);
+  }
+  if (text.startsWith("!aban")) {
+    const uid = parseInt(text.split(" ")[1]) || senderId;
+    await banUser(uid, null, true);
+    return context.send(`⛔ Пользователь ${uid} глобально забанен`);
+  }
+  if (text.startsWith("!akick")) {
+    const uid = parseInt(text.split(" ")[1]) || senderId;
+    return context.send(`👢 Пользователь ${uid} кикнут глобально`);
+  }
+
+  // === Статистика ===
+  if (text === "!stats") {
+    const stats = await getStats();
+    return context.send(
+      `📊 Статистика:
+👥 Пользователей: ${stats.users}
+💬 Групп: ${stats.groups}
+⛔ Забанено: ${stats.banned}
+⚠️ Всего варнов: ${stats.warns}`
+    );
+  }
+
+  // === Сапёр ===
+  if (text === "!saper") {
+    const board = Array.from({ length: 5 }, () =>
+      Array.from({ length: 5 }, () => (Math.random() < 0.2 ? "💣" : "⬜"))
+    );
     saperGames[senderId] = board;
-    return context.send("💣 Игра сапёр! Нажимай на квадраты:", renderSaperButtons(board));
+    return context.send("💣 Игра сапёр! Нажимай:", renderSaperButtons(board));
   }
-
-  // === !saper_reset - сброс игры ===
-  if(text === "!saper_reset"){
+  if (text === "!saper_reset") {
     delete saperGames[senderId];
-    return context.send("🔄 Игра сапёр сброшена. Чтобы начать новую, напиши !saper");
+    return context.send("🔄 Игра сапёр сброшена. Напиши !saper");
   }
-
-  // === Обработка нажатий сапёра ===
   let payloadStr = null;
-  if(context.payload){
-    if(typeof context.payload === "string") payloadStr = context.payload;
-    else if(typeof context.payload === "object" && context.payload.payload){
-      try{ payloadStr = JSON.parse(context.payload.payload).type }catch{}
+  if (context.payload) {
+    if (typeof context.payload === "string") payloadStr = context.payload;
+    else if (typeof context.payload === "object" && context.payload.payload) {
+      try {
+        payloadStr = JSON.parse(context.payload.payload).type;
+      } catch {}
     }
   }
-
-  if(payloadStr?.startsWith("saper_")){
+  if (payloadStr?.startsWith("saper_")) {
     const parts = payloadStr.split("_");
     const x = parseInt(parts[1]);
     const y = parseInt(parts[2]);
     const board = saperGames[senderId];
-    if(!board) return context.send("❌ Игра не найдена. Напиши !saper");
-    if(board[x][y]==="💣"){ 
-      delete saperGames[senderId]; 
-      return context.send("💥 Бум! Вы проиграли!"); 
+    if (!board) return context.send("❌ Игра не найдена. Напиши !saper");
+    if (board[x][y] === "💣") {
+      delete saperGames[senderId];
+      return context.send("💥 Бум! Вы проиграли!");
     }
-    board[x][y]="✅"; 
+    board[x][y] = "✅";
     return context.send("🟩 Открыто!", renderSaperButtons(board));
   }
 
-  // === !bind ===
+  // === Задачи ===
   if (text.startsWith("!bind")) {
-    if (context.isChat) {
-      const members = await vk.api.messages.getConversationMembers({ peer_id: peerId });
-      const member = members.items.find((m) => m.member_id === senderId);
-      if (!member?.is_admin) return context.send("❌ Только администраторы чата могут использовать !bind");
-    }
-
     const parts = text.split(" ");
     if (parts.length < 3) return context.send("❌ Использование: !bind HH:MM текст [кол-во повторов]");
-
     let time = parts[1];
     if (!validateTimeString(time)) return context.send("❌ Неверный формат времени");
-
     let repeatCount = 1;
     let msgText = "";
     if (!isNaN(parts[parts.length - 1])) {
@@ -355,26 +343,21 @@ updates.on("message_new", async (context) => {
     } else {
       msgText = parts.slice(2).join(" ");
     }
-
     if (!msgText) return context.send("❌ Текст задачи не может быть пустым");
     if (repeatCount < 1) return context.send("❌ Количество повторов должно быть > 0");
-
     const newTask = createTask(peerId, time, msgText, repeatCount);
     tasks.push(newTask);
     await saveTasks(tasks);
-
     return context.send(`✅ Задача добавлена:\n🕒 ${time}\n💬 "${msgText}"\n🔁 ${repeatCount} раз`);
   }
-
-  // === !tasks ===
   if (text === "!tasks") {
     if (tasks.length === 0) return context.send("📭 Нет активных задач");
     let list = "📋 Активные задачи:\n";
-    tasks.forEach((t, i) => { list += `${i + 1}. [${t.time}] "${t.text}" ×${t.times}\n`; });
+    tasks.forEach((t, i) => {
+      list += `${i + 1}. [${t.time}] "${t.text}" ×${t.times}\n`;
+    });
     return context.send(list);
   }
-
-  // === !deltask ===
   if (text.startsWith("!deltask")) {
     const parts = text.split(" ");
     if (parts.length !== 2) return context.send("❌ Использование: !deltask номер");
@@ -391,4 +374,3 @@ updates.on("message_new", async (context) => {
   console.log("🚀 Бот запущен");
   await updates.start();
 })();
-
