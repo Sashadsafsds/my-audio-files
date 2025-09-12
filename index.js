@@ -19,17 +19,17 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+//==хз иницилизация бд===
 
-// === Инициализация БД ===
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       user_id BIGINT NOT NULL,
-      chat_id BIGINT DEFAULT NULL,
+      chat_id BIGINT,
       warns INT DEFAULT 0,
       banned BOOLEAN DEFAULT FALSE,
       global BOOLEAN DEFAULT FALSE,
-      PRIMARY KEY (user_id, COALESCE(chat_id, -1))
+      PRIMARY KEY (user_id, chat_id)
     )
   `);
 
@@ -43,6 +43,7 @@ async function initDB() {
 
   console.log("✅ Таблицы users и groups инициализированы");
 }
+
 
 // === Express keep-alive ===
 const app = express();
