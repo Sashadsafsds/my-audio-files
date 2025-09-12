@@ -19,8 +19,8 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
-//==хз иницилизация бд===
 
+// === Инициализация БД ===
 async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -43,7 +43,6 @@ async function initDB() {
 
   console.log("✅ Таблицы users и groups инициализированы");
 }
-
 
 // === Express keep-alive ===
 const app = express();
@@ -130,28 +129,31 @@ async function addWarn(userId, chatId, global = false) {
   await pool.query(
     `INSERT INTO users (user_id, chat_id, warns, global)
      VALUES ($1, $2, 1, $3)
-     ON CONFLICT (user_id, COALESCE(chat_id, -1))
+     ON CONFLICT (user_id, chat_id)
      DO UPDATE SET warns = users.warns + 1`,
     [userId, keyChat, global]
   );
 }
+
 async function banUser(userId, chatId, global = false) {
   const keyChat = global ? null : chatId;
   await pool.query(
     `INSERT INTO users (user_id, chat_id, banned, global)
      VALUES ($1, $2, TRUE, $3)
-     ON CONFLICT (user_id, COALESCE(chat_id, -1))
+     ON CONFLICT (user_id, chat_id)
      DO UPDATE SET banned = TRUE`,
     [userId, keyChat, global]
   );
 }
+
 async function unbanUser(userId, chatId, global = false) {
   const keyChat = global ? null : chatId;
   await pool.query(
-    `UPDATE users SET banned = FALSE WHERE user_id=$1 AND COALESCE(chat_id, -1) = COALESCE($2, -1)`,
+    `UPDATE users SET banned = FALSE WHERE user_id=$1 AND chat_id IS NOT DISTINCT FROM $2`,
     [userId, keyChat]
   );
 }
+
 async function getStats() {
   const totalUsers = await pool.query("SELECT COUNT(*) FROM users");
   const totalGroups = await pool.query("SELECT COUNT(*) FROM groups");
@@ -164,6 +166,8 @@ async function getStats() {
     warns: warns.rows[0].sum || 0,
   };
 }
+
+// === Остальной код остаётся без изменений ===
 
 // === Логи сообщений ===
 async function sendMessage(peerId, text, keyboard) {
