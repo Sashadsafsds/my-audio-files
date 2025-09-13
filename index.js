@@ -25,10 +25,11 @@ async function initDB() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       user_id BIGINT NOT NULL,
-      chat_id BIGINT,
+      chat_id BIGINT NOT NULL DEFAULT 0,
       warns INT DEFAULT 0,
       banned BOOLEAN DEFAULT FALSE,
       global BOOLEAN DEFAULT FALSE,
+      role TEXT DEFAULT 'пользователь',
       PRIMARY KEY (user_id, chat_id)
     )
   `);
@@ -41,7 +42,18 @@ async function initDB() {
     )
   `);
 
-  console.log("✅ Таблицы users и groups инициализированы");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bans (
+      id SERIAL PRIMARY KEY,
+      user_id BIGINT NOT NULL,
+      chat_id BIGINT NOT NULL DEFAULT 0,
+      reason TEXT,
+      banned_at TIMESTAMP DEFAULT NOW(),
+      global BOOLEAN DEFAULT FALSE
+    )
+  `);
+
+  console.log("✅ Таблицы инициализированы");
 }
 
 // === Express keep-alive ===
@@ -124,8 +136,17 @@ const vk = new VK({
 const { updates } = vk;
 
 // === Утилиты для работы с БД пользователей ===
+async function ensureUser(userId, chatId, role = "пользователь") {
+  await pool.query(
+    `INSERT INTO users (user_id, chat_id, role)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, chat_id) DO NOTHING`,
+    [userId, chatId || 0, role]
+  );
+}
+
 async function addWarn(userId, chatId, global = false) {
-  const keyChat = global ? null : chatId;
+  const keyChat = global ? 0 : chatId;
   await pool.query(
     `INSERT INTO users (user_id, chat_id, warns, global)
      VALUES ($1, $2, 1, $3)
@@ -135,8 +156,8 @@ async function addWarn(userId, chatId, global = false) {
   );
 }
 
-async function banUser(userId, chatId, global = false) {
-  const keyChat = global ? null : chatId;
+async function banUser(userId, chatId, global = false, reason = "") {
+  const keyChat = global ? 0 : chatId;
   await pool.query(
     `INSERT INTO users (user_id, chat_id, banned, global)
      VALUES ($1, $2, TRUE, $3)
@@ -144,30 +165,59 @@ async function banUser(userId, chatId, global = false) {
      DO UPDATE SET banned = TRUE`,
     [userId, keyChat, global]
   );
+  await pool.query(
+    `INSERT INTO bans (user_id, chat_id, reason, global) VALUES ($1, $2, $3, $4)`,
+    [userId, keyChat, reason, global]
+  );
 }
 
 async function unbanUser(userId, chatId, global = false) {
-  const keyChat = global ? null : chatId;
+  const keyChat = global ? 0 : chatId;
   await pool.query(
-    `UPDATE users SET banned = FALSE WHERE user_id=$1 AND chat_id IS NOT DISTINCT FROM $2`,
+    `UPDATE users SET banned = FALSE WHERE user_id=$1 AND chat_id=$2`,
     [userId, keyChat]
   );
 }
 
-async function getStats() {
-  const totalUsers = await pool.query("SELECT COUNT(*) FROM users");
-  const totalGroups = await pool.query("SELECT COUNT(*) FROM groups");
-  const banned = await pool.query("SELECT COUNT(*) FROM users WHERE banned=TRUE");
-  const warns = await pool.query("SELECT SUM(warns) FROM users");
-  return {
-    users: totalUsers.rows[0].count,
-    groups: totalGroups.rows[0].count,
-    banned: banned.rows[0].count,
-    warns: warns.rows[0].sum || 0,
-  };
+async function setRole(userId, chatId, role) {
+  await pool.query(
+    `UPDATE users SET role=$3 WHERE user_id=$1 AND chat_id=$2`,
+    [userId, chatId, role]
+  );
 }
 
-// === Остальной код остаётся без изменений ===
+async function getUser(userId, chatId) {
+  const res = await pool.query(
+    `SELECT * FROM users WHERE user_id=$1 AND chat_id=$2`,
+    [userId, chatId]
+  );
+  return res.rows[0];
+}
+
+async function getStats(chatId = null, userId = null) {
+  if (chatId && !userId) {
+    const members = await pool.query(
+      "SELECT COUNT(*) FROM users WHERE chat_id=$1",
+      [chatId]
+    );
+    const banned = await pool.query(
+      "SELECT COUNT(*) FROM users WHERE chat_id=$1 AND banned=TRUE",
+      [chatId]
+    );
+    return {
+      members: members.rows[0].count,
+      banned: banned.rows[0].count,
+    };
+  }
+  if (userId) {
+    const u = await pool.query(
+      "SELECT * FROM users WHERE user_id=$1 AND chat_id=$2",
+      [userId, chatId || 0]
+    );
+    return u.rows[0];
+  }
+  return {};
+}
 
 // === Логи сообщений ===
 async function sendMessage(peerId, text, keyboard) {
@@ -186,156 +236,97 @@ async function sendMessage(peerId, text, keyboard) {
   }
 }
 
-// === Сапёр ===
-function renderSaperButtons(board) {
-  return JSON.stringify({
-    one_time: false,
-    inline: true,
-    buttons: board.map((row, x) =>
-      row.map((cell, y) => ({
-        action: {
-          type: "text",
-          label: cell === "💣" ? "⬜" : cell,
-          payload: JSON.stringify({ type: `saper_${x}_${y}` }),
-        },
-        color: "secondary",
-      }))
-    ),
-  });
-}
-
-// === Планировщик задач ===
-setInterval(async () => {
-  const currentTime = formatTime();
-  let changed = false;
-  for (let i = tasks.length - 1; i >= 0; i--) {
-    const task = tasks[i];
-    if (!validateTimeString(task.time)) {
-      tasks.splice(i, 1);
-      changed = true;
-      continue;
-    }
-    if (task.time === currentTime && !task.sent) {
-      for (let j = 0; j < task.times; j++) {
-        await sendMessage(task.peerId, task.text);
-      }
-      task.sent = true;
-      tasks.splice(i, 1);
-      changed = true;
-    }
-  }
-  if (changed) await saveTasks(tasks);
-}, 5 * 1000);
-
 // === Обработка сообщений ===
 updates.on("message_new", async (context) => {
   if (!context.isUser && !context.isChat) return;
   const peerId = context.peerId;
-  const text = context.text?.trim();
   const senderId = context.senderId;
+  const text = context.text?.trim();
   if (!text) return;
-  await fs.appendFile(LOG_FILE, `[${new Date().toISOString()}] ${senderId}: ${text}\n`);
 
-  // === help ===
-  if (text === "!help") {
-    return context.send(
-      `📚 Команды бота:
-!bind HH:MM текст [кол-во повторов] - добавить задачу
-!tasks - список задач
-!deltask номер - удалить задачу
-!warn @id - варн (локально)
-!ban @id - бан (локально)
-!kick @id - кик (локально)
-!awarn @id - варн (глобально)
-!aban @id - бан (глобально)
-!akick @id - кик (глобально)
-!stats - статистика
-!saper - сапёр
-!saper_reset - сброс игры`
+  // Сохраняем пользователя
+  await ensureUser(senderId, peerId);
+
+  // /начать
+  if (text === "/начать") {
+    await pool.query(
+      `INSERT INTO groups (chat_id, title, members_count)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (chat_id) DO UPDATE SET title=$2, members_count=$3`,
+      [peerId, context.chatSettings?.title || "Без названия", context.chatSettings?.membersCount || 0]
     );
+    await setRole(senderId, peerId, "админ");
+    return context.send("✅ Группа добавлена в базу, вы назначены админом");
   }
 
-  // === Warn/Ban/Kick локальные ===
+  // Роли
+  if (text.startsWith("!setrole")) {
+    const parts = text.split(" ");
+    if (parts.length !== 3) return context.send("Использование: !setrole <id> <админ|пользователь>");
+    const targetId = parseInt(parts[1], 10);
+    const role = parts[2];
+    const user = await getUser(senderId, peerId);
+    if (user?.role !== "админ") return context.send("⛔ Нет прав");
+    await setRole(targetId, peerId, role);
+    return context.send(`✅ Роль пользователя ${targetId} изменена на ${role}`);
+  }
+
+  // Warn/Ban/Kick локальные
   if (text.startsWith("!warn")) {
     const uid = parseInt(text.split(" ")[1]) || senderId;
     await addWarn(uid, peerId, false);
     return context.send(`⚠️ Пользователь ${uid} получил локальный варн`);
   }
   if (text.startsWith("!ban")) {
-    const uid = parseInt(text.split(" ")[1]) || senderId;
-    await banUser(uid, peerId, false);
-    return context.send(`⛔ Пользователь ${uid} локально забанен`);
+    const parts = text.split(" ");
+    const uid = parseInt(parts[1]) || senderId;
+    const reason = parts.slice(2).join(" ") || "";
+    await banUser(uid, peerId, false, reason);
+    try {
+      await vk.api.messages.removeChatUser({ chat_id: peerId - 2000000000, member_id: uid });
+    } catch (e) {
+      console.error("Не удалось кикнуть:", e.message);
+    }
+    return context.send(`⛔ Пользователь ${uid} забанен. Причина: ${reason || "не указана"}`);
   }
   if (text.startsWith("!kick")) {
-    const uid = parseInt(text.split(" ")[1]) || senderId;
-    return context.send(`👢 Пользователь ${uid} кикнут из этого чата`);
+    const parts = text.split(" ");
+    const uid = parseInt(parts[1]) || senderId;
+    const reason = parts.slice(2).join(" ") || "";
+    await pool.query(`INSERT INTO bans (user_id, chat_id, reason, global) VALUES ($1, $2, $3, $4)`,
+      [uid, peerId, reason, false]);
+    try {
+      await vk.api.messages.removeChatUser({ chat_id: peerId - 2000000000, member_id: uid });
+    } catch (e) {
+      console.error("Не удалось кикнуть:", e.message);
+    }
+    return context.send(`👢 Пользователь ${uid} кикнут. Причина: ${reason || "не указана"}`);
   }
 
-  // === Warn/Ban/Kick глобальные ===
-  if (text.startsWith("!awarn")) {
-    const uid = parseInt(text.split(" ")[1]) || senderId;
-    await addWarn(uid, null, true);
-    return context.send(`⚠️ Пользователь ${uid} получил глобальный варн`);
-  }
+  // Warn/Ban/Kick глобальные
   if (text.startsWith("!aban")) {
-    const uid = parseInt(text.split(" ")[1]) || senderId;
-    await banUser(uid, null, true);
-    return context.send(`⛔ Пользователь ${uid} глобально забанен`);
-  }
-  if (text.startsWith("!akick")) {
-    const uid = parseInt(text.split(" ")[1]) || senderId;
-    return context.send(`👢 Пользователь ${uid} кикнут глобально`);
+    const parts = text.split(" ");
+    const uid = parseInt(parts[1]) || senderId;
+    const reason = parts.slice(2).join(" ") || "";
+    await banUser(uid, 0, true, reason);
+    return context.send(`⛔ Пользователь ${uid} глобально забанен. Причина: ${reason || "не указана"}`);
   }
 
-  // === Статистика ===
+  // Статистика
   if (text === "!stats") {
-    const stats = await getStats();
-    return context.send(
-      `📊 Статистика:
-👥 Пользователей: ${stats.users}
-💬 Групп: ${stats.groups}
-⛔ Забанено: ${stats.banned}
-⚠️ Всего варнов: ${stats.warns}`
-    );
-  }
-
-  // === Сапёр ===
-  if (text === "!saper") {
-    const board = Array.from({ length: 5 }, () =>
-      Array.from({ length: 5 }, () => (Math.random() < 0.2 ? "💣" : "⬜"))
-    );
-    saperGames[senderId] = board;
-    return context.send("💣 Игра сапёр! Нажимай:", renderSaperButtons(board));
-  }
-  if (text === "!saper_reset") {
-    delete saperGames[senderId];
-    return context.send("🔄 Игра сапёр сброшена. Напиши !saper");
-  }
-  let payloadStr = null;
-  if (context.payload) {
-    if (typeof context.payload === "string") payloadStr = context.payload;
-    else if (typeof context.payload === "object" && context.payload.payload) {
-      try {
-        payloadStr = JSON.parse(context.payload.payload).type;
-      } catch {}
+    if (context.isChat) {
+      const s = await getStats(peerId);
+      return context.send(`📊 Статистика чата:\n👥 Участников: ${s.members}\n⛔ Забанено: ${s.banned}`);
+    } else {
+      const u = await getStats(null, senderId);
+      return context.send(`📊 Ваша статистика:\n👤 ID: ${u.user_id}\n⚠️ Варны: ${u.warns}\n⛔ Бан: ${u.banned ? "Да" : "Нет"}\nРоль: ${u.role}`);
     }
   }
-  if (payloadStr?.startsWith("saper_")) {
-    const parts = payloadStr.split("_");
-    const x = parseInt(parts[1]);
-    const y = parseInt(parts[2]);
-    const board = saperGames[senderId];
-    if (!board) return context.send("❌ Игра не найдена. Напиши !saper");
-    if (board[x][y] === "💣") {
-      delete saperGames[senderId];
-      return context.send("💥 Бум! Вы проиграли!");
-    }
-    board[x][y] = "✅";
-    return context.send("🟩 Открыто!", renderSaperButtons(board));
-  }
 
-  // === Задачи ===
+  // !bind только для админов
   if (text.startsWith("!bind")) {
+    const user = await getUser(senderId, peerId);
+    if (user?.role !== "админ") return context.send("⛔ Нет прав");
     const parts = text.split(" ");
     if (parts.length < 3) return context.send("❌ Использование: !bind HH:MM текст [кол-во повторов]");
     let time = parts[1];
@@ -354,23 +345,6 @@ updates.on("message_new", async (context) => {
     tasks.push(newTask);
     await saveTasks(tasks);
     return context.send(`✅ Задача добавлена:\n🕒 ${time}\n💬 "${msgText}"\n🔁 ${repeatCount} раз`);
-  }
-  if (text === "!tasks") {
-    if (tasks.length === 0) return context.send("📭 Нет активных задач");
-    let list = "📋 Активные задачи:\n";
-    tasks.forEach((t, i) => {
-      list += `${i + 1}. [${t.time}] "${t.text}" ×${t.times}\n`;
-    });
-    return context.send(list);
-  }
-  if (text.startsWith("!deltask")) {
-    const parts = text.split(" ");
-    if (parts.length !== 2) return context.send("❌ Использование: !deltask номер");
-    const idx = parseInt(parts[1], 10) - 1;
-    if (isNaN(idx) || idx < 0 || idx >= tasks.length) return context.send("❌ Неверный номер задачи");
-    const removed = tasks.splice(idx, 1);
-    await saveTasks(tasks);
-    return context.send(`🗑 Удалена задача: "${removed[0].text}"`);
   }
 });
 
